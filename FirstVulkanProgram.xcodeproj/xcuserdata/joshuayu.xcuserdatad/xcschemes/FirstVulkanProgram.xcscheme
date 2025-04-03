@@ -31,7 +31,7 @@
       shouldAutocreateTestPlan = "YES">
    </TestAction>
    <LaunchAction
-      buildConfiguration = "Debug"
+      buildConfiguration = "Release"
       selectedDebuggerIdentifier = ""
       selectedLauncherIdentifier = "Xcode.IDEFoundation.Launcher.PosixSpawn"
       launchStyle = "0"
@@ -54,12 +54,12 @@
       <EnvironmentVariables>
          <EnvironmentVariable
             key = "VK_ICD_FILENAMES"
-            value = "vulkansdk/macOS/share/vulkan/icd.d/MoltenVK_icd.json"
+            value = "/Users/joshuayu/VulkanSDK/1.4.309.0/macOS/share/vulkan/icd.d/MoltenVK_icd.json"
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "VK_LAYER_PATH"
-            value = "vulkansdk/macOS/share/vulkan/explicit_layer.d"
+            value = "/Users/joshuayu/VulkanSDK/1.4.309.0/macOS/share/vulkan/explicit_layer.d"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>
