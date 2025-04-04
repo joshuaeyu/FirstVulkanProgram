@@ -110,6 +110,7 @@
 			buildConfigurationList = E481F3932D6E348300C06587 /* Build configuration list for PBXNativeTarget "FirstVulkanProgram" */;
 			buildPhases = (
 				E481F38A2D6E348300C06587 /* Copy Files */,
+				E49216732D9FACF000DBED6F /* Run Script */,
 				E481F3882D6E348300C06587 /* Sources */,
 				E481F3892D6E348300C06587 /* Frameworks */,
 			);
@@ -159,6 +160,31 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		E49216732D9FACF000DBED6F /* Run Script */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/FirstVulkanProgram/shader.vert",
+				"$(SRCROOT)/FirstVulkanProgram/shader.frag",
+			);
+			name = "Run Script";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/FirstVulkanProgram/shaders/vert.spv",
+				"$(SRCROOT)/FirstVulkanProgram/shaders/frag.spv",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n/Users/joshuayu/Documents/Programming/Vulkan/FirstVulkanProgram/FirstVulkanProgram/compile.sh $SRCROOT/FirstVulkanProgram\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		E481F3882D6E348300C06587 /* Sources */ = {
@@ -293,6 +319,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				HEADER_SEARCH_PATHS = (
 					/usr/local/include,
 					/Users/joshuayu/VulkanSDK/1.4.309.0/macOS/include,
@@ -310,6 +337,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = "NDEBUG=1";
 				HEADER_SEARCH_PATHS = (
 					/usr/local/include,
