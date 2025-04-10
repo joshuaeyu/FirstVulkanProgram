@@ -91,19 +91,24 @@ public:
     }
 private:
     GLFWwindow *window;
+    // Instance
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger;
+    // Device
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkDevice device;
     VkQueue graphicsQueue;
     VkSurfaceKHR surface;
     VkQueue presentQueue;
     const std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    // Swapchain
     VkSwapchainKHR swapchain;
     VkFormat swapchainImageFormat;
     VkExtent2D swapchainExtent;
     std::vector<VkImage> swapchainImages;
     std::vector<VkImageView> swapchainImageViews;
+    // Graphics pipeline
+    VkRenderPass renderPass;
     VkPipelineLayout pipelineLayout;
     
     void initWindow() {
@@ -120,6 +125,7 @@ private:
         createLogicalDevice();
         createSwapchain();
         createImageViews();
+        createRenderPass();
         createGraphicsPipeline();
     }
     void mainLoop() {
@@ -129,6 +135,7 @@ private:
     }
     void cleanup() {
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+        vkDestroyRenderPass(device, renderPass, nullptr);
         for (auto& imageView : swapchainImageViews) {
             vkDestroyImageView(device, imageView, nullptr);
         }
@@ -544,6 +551,46 @@ private:
         }
     }
     
+    // ================ createRenderPass() ================
+    void createRenderPass() {
+        // Attachment
+        VkAttachmentDescription colorAttachment{};
+        colorAttachment.format = swapchainImageFormat;
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT; // No multisampling yet
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Clear previous color from framebuffer before drawing
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // Store rendered contents in memory
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // Image layout needs to be suitable for next operation (i.e., presentation using the swap chain)
+        
+        // Subpass
+        VkAttachmentReference colorAttachmentRef{};
+        colorAttachmentRef.attachment = 0; // Attachment index in VkAttachmentDescription array of VkRenderPassCreateInfo (createInfo.pAttachments)
+        colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; // Attachment will be used as a color buffer
+        
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // Graphics, ray tracing, or compute
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorAttachmentRef; // Color attachment is at index 0 -> layout(location = 0) out vec4 outColor in fragment shader
+        subpass.inputAttachmentCount = 0;
+        subpass.pInputAttachments = nullptr;
+        subpass.preserveAttachmentCount = 0;
+        subpass.pPreserveAttachments = nullptr;
+        subpass.pDepthStencilAttachment = nullptr;
+        
+        VkRenderPassCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        createInfo.attachmentCount = 1;
+        createInfo.pAttachments = &colorAttachment; // Color attachment at index 0
+        createInfo.subpassCount = 1;
+        createInfo.pSubpasses = &subpass;
+        
+        if (vkCreateRenderPass(device, &createInfo, nullptr, &renderPass) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create render pass!");
+        }
+    }
+    
     // ================ createGraphicsPipeline() ================
     void createGraphicsPipeline() {
         // ===== Shader modules =====
@@ -586,7 +633,7 @@ private:
         inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         inputAssemblyInfo.primitiveRestartEnable = VK_FALSE;    // For _STRIP topologies, allows breaking up of primitives using a special element buffer index 0xFFFF or 0xFFFFFF
         
-        // --- Viewports and scissors ---
+        // --- Viewport and scissor ---
         constexpr bool dynamic = false;
 
         // Static (specify now)
@@ -690,6 +737,7 @@ private:
         vkDestroyShaderModule(device, fragShaderModule, nullptr);
         
     }
+    
     VkShaderModule createShaderModule(const std::vector<char>& code) {
         
         VkShaderModuleCreateInfo createInfo{};
