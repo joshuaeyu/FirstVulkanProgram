@@ -102,7 +102,8 @@ private:
     VkQueue graphicsQueue;
     VkSurfaceKHR surface;
     VkQueue presentQueue;
-    const std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    bool portabilitySubsetExtSupported = false;
     // Swapchain
     VkSwapchainKHR swapchain;
     VkFormat swapchainImageFormat;
@@ -222,14 +223,16 @@ private:
         std::vector<VkExtensionProperties> extensions(extensionCount);
         vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
         
-        // Required extensions (by GLFW)
-        std::vector<const char*> requiredExtensions = getRequiredExtensions();
+        // Required extensions
+        std::vector<const char*> requiredExtensions = getRequiredExtensions(); // GLFW required extensions
+        requiredExtensions.push_back("VK_KHR_get_physical_device_properties2"); // Required by device extension VK_KHR_portability_subset
         
         // Check all required extensions are supported
         for (const auto& required : requiredExtensions) {
-            const auto it = std::find_if(extensions.begin(), extensions.end(), [&required](VkExtensionProperties ext){ return strcmp(required, ext.extensionName ) == 0; });
-            if (it == extensions.end())
+            const auto it = std::find_if(extensions.begin(), extensions.end(), [&required](VkExtensionProperties ext){ return strcmp(required, ext.extensionName) == 0; });
+            if (it == extensions.end()) {
                 throw std::runtime_error("Required extension " + std::string(required) + " is not supported!");
+            }
         }
         std::cout << "All required extensions are supported." << std::endl;
         
@@ -323,6 +326,9 @@ private:
         for (const auto& device : devices) {
             if (isDeviceSuitable(device)) {
                 physicalDevice = device;
+                if (portabilitySubsetExtSupported) {
+                    deviceExtensions.push_back("VK_KHR_portability_subset");
+                }
                 break;
             }
             // Can also rate device suitability based on its properties and pick the best one!
@@ -387,14 +393,14 @@ private:
         vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
         
         std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
+        bool portabilitySubsetSupported = false;
         for (const auto& extension : availableExtensions) {
             requiredExtensions.erase(extension.extensionName);
+            if (strcmp(extension.extensionName, "VK_KHR_portability_subset") == 0) {
+                portabilitySubsetExtSupported = true;
+            }
         }
-//        extensionNames.push_back("VK_KHR_get_physical_device_properties2");
-//        extensionNames.push_back("VK_KHR_portability_subset");
-//        createInfo.enabledExtensionCount = static_cast<uint32_t>(extensionNames.size());
-//        createInfo.ppEnabledExtensionNames = extensionNames.data();
-//        createInfo.pNext = nullptr;
+        
         return requiredExtensions.empty();
     }
     SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice device) {
@@ -448,7 +454,6 @@ private:
         createInfo.pEnabledFeatures = &deviceFeatures;
         createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
         createInfo.ppEnabledExtensionNames = deviceExtensions.data();
-//        createInfo.pNext = nullptr;
         
         // Create device
         if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
