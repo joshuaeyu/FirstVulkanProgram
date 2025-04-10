@@ -117,6 +117,9 @@ private:
     std::vector<VkFramebuffer> swapchainFramebuffers;
     VkCommandPool commandPool;
     VkCommandBuffer commandBuffer;
+    VkSemaphore imageAvailableSemaphore;
+    VkSemaphore renderFinishedSemaphore;
+    VkFence inFlightFence;
     
     void initWindow() {
         glfwInit();
@@ -137,13 +140,19 @@ private:
         createFramebuffers();
         createCommandPool();
         createCommandBuffer();
+        createSyncObjects();
     }
     void mainLoop() {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+            drawFrame();
         }
+        vkDeviceWaitIdle(device);
     }
     void cleanup() {
+        vkDestroyFence(device, inFlightFence, nullptr);
+        vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
+        vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
         vkDestroyCommandPool(device, commandPool, nullptr);
         for (auto framebuffer : swapchainFramebuffers) {
             vkDestroyFramebuffer(device, framebuffer, nullptr);
@@ -506,7 +515,7 @@ private:
     }
     VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
         for (const auto& availableFormat : availableFormats) {
-            if (availableFormat.format == VK_FORMAT_B8G8R8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 return availableFormat;
             }
         }
@@ -600,6 +609,17 @@ private:
         createInfo.pAttachments = &colorAttachment; // Color attachment at index 0
         createInfo.subpassCount = 1;
         createInfo.pSubpasses = &subpass;
+        
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL; // The implicit subpass before the render pass
+        dependency.dstSubpass = 0; // Our subpass index
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; // Wait for swap chain to finish reading from the color attachment before accessing it
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; // After waiting, write to the color attachment
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        
+        createInfo.dependencyCount = 1;
+        createInfo.pDependencies = &dependency;
         
         if (vkCreateRenderPass(device, &createInfo, nullptr, &renderPass) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create render pass!");
@@ -893,6 +913,83 @@ private:
         // End command buffer
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
             throw std::runtime_error("Failed to end recording command buffer!");
+        }
+    }
+    
+    // ================ createSyncObjects() ================
+    void createSyncObjects() {
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+               
+        if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS
+            || vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create semaphores!");
+        
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Start in signaled state so that the very first VkWaitForFences call doesn't block
+        
+        if (vkCreateFence(device, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create fence!");
+        }
+    }
+    
+    // ================ drawFrame() ================
+    void drawFrame() {
+        // Many Vulkan API calls for the GPU are asynchronous.
+        // Therefore, synchronization of GPU execution must be explicitly specified to enforce order of operations.
+        // - VkSemaphore - specify order of GPU operations (GPU blocks for GPU)
+        // - VkFence - synchronize CPU and GPU (CPU blocks for GPU)
+        
+        // 1. Wait for previous frame to finish (when previous command buffer finishes execution)
+        vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, UINT64_MAX); // Blocks
+        vkResetFences(device, 1, &inFlightFence);
+        
+        // 2. Acquire an image from the swap chain
+        uint32_t imageIndex;
+        vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+        
+        // 3. Record a command buffer to draw the scene onto that image
+        vkResetCommandBuffer(commandBuffer, 0);
+        recordCommandBuffer(commandBuffer, imageIndex);
+        
+        // 4. Submit the recorded command buffer
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        
+        VkSemaphore waitSemaphores[] = {imageAvailableSemaphore};
+        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}; // GPU must wait to write colors to the image until it is available, but is allowed to execute other pipeline stages anytime
+//        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}; // GPU must wait to write colors to the image until it is available, but is allowed to execute other pipeline stages anytime
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+        
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+        
+        VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+        
+        if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to submit draw command buffer!");
+        }
+        
+        // 5. Present the swap chain image
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = signalSemaphores;
+        
+        VkSwapchainKHR swapchains[] = {swapchain};
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = swapchains;
+        presentInfo.pImageIndices = &imageIndex;
+        presentInfo.pResults = nullptr; // Allows you to check presentation result of each swap chain
+        
+        if (vkQueuePresentKHR(presentQueue, &presentInfo) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to present image to the swap chain!");
         }
     }
     
