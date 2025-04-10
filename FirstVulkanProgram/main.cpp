@@ -124,12 +124,15 @@ private:
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
+    bool framebufferResized = false;
     
     void initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         window = glfwCreateWindow(WIDTH, HEIGHT, "FirstVulkanProgram", nullptr, nullptr);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetWindowSizeCallback(window, windowSizeCallback);
+        glfwSetWindowIconifyCallback(window, windowIconifyCallback);
     }
     void initVulkan() {
         createInstance();
@@ -154,30 +157,50 @@ private:
         vkDeviceWaitIdle(device);
     }
     void cleanup() {
+        cleanupSwapchain();
+        
+        vkDestroyPipeline(device, graphicsPipeline, nullptr);
+        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+        vkDestroyRenderPass(device, renderPass, nullptr);
+        
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroyFence(device, inFlightFences[i], nullptr);
             vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
         }
+        
         vkDestroyCommandPool(device, commandPool, nullptr);
+
+        vkDestroyDevice(device, nullptr);
+        
+        if (enableValidationLayers)
+            DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+        
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+        vkDestroyInstance(instance, nullptr);
+        
+        glfwDestroyWindow(window);
+        glfwTerminate();
+    }
+    
+    static void windowSizeCallback(GLFWwindow* window, int width, int height) {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->framebufferResized = true;
+    }
+    static void windowIconifyCallback(GLFWwindow* window, int iconified) {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->framebufferResized = true;
+    }
+    void cleanupSwapchain() {
         for (auto framebuffer : swapchainFramebuffers) {
             vkDestroyFramebuffer(device, framebuffer, nullptr);
         }
-        vkDestroyPipeline(device, graphicsPipeline, nullptr);
-        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-        vkDestroyRenderPass(device, renderPass, nullptr);
         for (auto& imageView : swapchainImageViews) {
             vkDestroyImageView(device, imageView, nullptr);
         }
         vkDestroySwapchainKHR(device, swapchain, nullptr);
-        vkDestroyDevice(device, nullptr);
-        vkDestroySurfaceKHR(instance, surface, nullptr);
-        if (enableValidationLayers)
-            DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
-        vkDestroyInstance(instance, nullptr);
-        glfwDestroyWindow(window);
-        glfwTerminate();
     }
+    
     
     // ================ createInstance() ================
     void createInstance() {
@@ -356,7 +379,7 @@ private:
         QueueFamilyIndices indices = findQueueFamilies(device);
         // Device extensions
         bool extensionsSupported = checkDeviceExtensionSupport(device);
-        // Swap chain
+        // Swap chain surface formats and present modes
         bool swapchainAdequate = false;
         if (extensionsSupported) {
             SwapchainSupportDetails swapchainSupport = querySwapchainSupport(device);
@@ -471,16 +494,21 @@ private:
     
     // ================ createSwapChain() ================
     void createSwapchain() {
+        // Query capabilities, surface formats, present modes of physical device
         SwapchainSupportDetails swapchainSupport = querySwapchainSupport(physicalDevice);
         
+        // Pick surface format and present mode
         VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapchainSupport.formats);
         VkPresentModeKHR presentMode = chooseSwapPresentMode(swapchainSupport.presentModes);
-        VkExtent2D extent = chooseSwapExtent(swapchainSupport.capabilities);
+        
+        // Determine image count and extent based on capabilities
         uint32_t imageCount = swapchainSupport.capabilities.minImageCount + 1;
         if (swapchainSupport.capabilities.maxImageCount > 0 && imageCount > swapchainSupport.capabilities.maxImageCount) {
             imageCount = swapchainSupport.capabilities.maxImageCount;
         }
+        VkExtent2D extent = chooseSwapExtent(swapchainSupport.capabilities);
         
+        // Create swap chain
         VkSwapchainCreateInfoKHR createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         createInfo.surface = surface;
@@ -514,10 +542,12 @@ private:
             throw std::runtime_error("Failed to create swap chain!");
         }
         
+        // Store actual swap chain image structs
         vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr);
         swapchainImages.resize(imageCount);
         vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data());
         
+        // Store surface format and extent for later uses
         swapchainImageFormat = surfaceFormat.format;
         swapchainExtent = extent;
         
@@ -586,7 +616,7 @@ private:
     
     // ================ createRenderPass() ================
     void createRenderPass() {
-        // Attachment
+        // Color attachment
         VkAttachmentDescription colorAttachment{};
         colorAttachment.format = swapchainImageFormat;
         colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT; // No multisampling yet
@@ -606,11 +636,11 @@ private:
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // Graphics, ray tracing, or compute
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &colorAttachmentRef; // Color attachment is at index 0 -> layout(location = 0) out vec4 outColor in fragment shader
+        subpass.pDepthStencilAttachment = nullptr;
         subpass.inputAttachmentCount = 0;
         subpass.pInputAttachments = nullptr;
         subpass.preserveAttachmentCount = 0;
         subpass.pPreserveAttachments = nullptr;
-        subpass.pDepthStencilAttachment = nullptr;
         
         VkRenderPassCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -619,6 +649,7 @@ private:
         createInfo.subpassCount = 1;
         createInfo.pSubpasses = &subpass;
         
+        // Can instead specify VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT as a wait stage for VkQueueSubmit()
         VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL; // The implicit subpass before the render pass
         dependency.dstSubpass = 0; // Our subpass index
@@ -960,11 +991,19 @@ private:
         
         // 1. Wait for previous frame to finish (when previous command buffer finishes execution)
         vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX); // Blocks
-        vkResetFences(device, 1, &inFlightFences[currentFrame]);
         
         // 2. Acquire an image from the swap chain
         uint32_t imageIndex;
-        vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            // Can't check framebufferResized here because then imageAvailableSemaphore is already signaled
+            // I.e., this frame's vkQueueSubmit would never get to wait for (and subsequently reset) imageAvailableSemaphore
+            recreateSwapchain();
+            return;
+        } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+            throw std::runtime_error("Failed to acquire swap chain image!");
+        }
+        vkResetFences(device, 1, &inFlightFences[currentFrame]); // To prevent deadlock, don't reset fence (put back in unsignaled state) until we know vkQueueSubmit will be called and signal it
         
         // 3. Record a command buffer to draw the scene onto that image
         vkResetCommandBuffer(commandBuffers[currentFrame], 0);
@@ -975,8 +1014,9 @@ private:
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         
         VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
-        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}; // GPU must wait to write colors to the image until it is available, but is allowed to execute other pipeline stages anytime
-//        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}; // GPU must wait to write colors to the image until it is available, but is allowed to execute other pipeline stages anytime
+        // GPU must wait to write colors to the image until it is available, but is allowed to execute other pipeline stages anytime
+        // Can also include VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT instead of creating a subpass source dependency on the swap chain image as done currently in createRenderPass()
+        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
         submitInfo.waitSemaphoreCount = 1;
         submitInfo.pWaitSemaphores = waitSemaphores;
         submitInfo.pWaitDstStageMask = waitStages;
@@ -1005,11 +1045,35 @@ private:
         presentInfo.pImageIndices = &imageIndex;
         presentInfo.pResults = nullptr; // Allows you to check presentation result of each swap chain
         
-        if (vkQueuePresentKHR(presentQueue, &presentInfo) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to present image to the swap chain!");
+        result = vkQueuePresentKHR(presentQueue, &presentInfo);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+            // Some platforms don't trigger VK_ERROR_OUT_OF_DATE_KHR after window resize
+            // Therefore, need to also explicitly check based on GLFW's callback
+            recreateSwapchain();
+            framebufferResized = false;
+        } else if (result != VK_SUCCESS) {
+            throw std::runtime_error("Failed to present swap chain image!");
         }
         
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+    void recreateSwapchain() {
+        int iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED);
+        int width, height;
+        glfwGetWindowSize(window, &width, &height);
+        while (iconified == GLFW_TRUE || width == 0 || height == 0) {
+            glfwWaitEvents();
+            iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED);
+            glfwGetWindowSize(window, &width, &height);
+        }
+        
+        vkDeviceWaitIdle(device);
+        
+        cleanupSwapchain();
+        
+        createSwapchain();
+        createImageViews();
+        createFramebuffers();
     }
     
     static std::vector<char> readFile(const std::string& filename) {
