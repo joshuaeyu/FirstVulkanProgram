@@ -34,7 +34,9 @@ const std::vector<const char*> validationLayers = {
 
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
-const bool dynamicViewportScissor = true;
+const bool DYNAMIC_VIEWPORT_SCISSOR = true;
+
+const bool SEPARATE_TRANSFER_QUEUE_FAMILY = true;
 
 #ifdef NDEBUG
     const bool enableValidationLayers = false;
@@ -58,9 +60,14 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphicsFamily;
+    std::optional<uint32_t> transferFamily;
     std::optional<uint32_t> presentFamily;
     bool isComplete() {
-        return graphicsFamily.has_value() && presentFamily.has_value();
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            return graphicsFamily.has_value() && presentFamily.has_value() && transferFamily.has_value();
+        } else {
+            return graphicsFamily.has_value() && presentFamily.has_value();
+        }
     }
 };
 
@@ -141,6 +148,7 @@ private:
     VkQueue graphicsQueue;
     VkSurfaceKHR surface;
     VkQueue presentQueue;
+    VkQueue transferQueue;
     std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     bool portabilitySubsetExtSupported = false;
     // Swapchain
@@ -155,8 +163,10 @@ private:
     VkPipeline graphicsPipeline;
     // Drawing
     std::vector<VkFramebuffer> swapchainFramebuffers;
-    VkCommandPool commandPool;
-    std::vector<VkCommandBuffer> commandBuffers;
+    VkCommandPool graphicsCommandPool;
+    VkCommandPool transferCommandPool;
+    std::vector<VkCommandBuffer> graphicsCommandBuffers;
+    std::vector<VkCommandBuffer> transferCommandBuffers;
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
@@ -184,7 +194,7 @@ private:
         createRenderPass();
         createGraphicsPipeline();
         createFramebuffers();
-        createCommandPool();
+        createCommandPools();
         createVertexBuffer();
         createCommandBuffers();
         createSyncObjects();
@@ -212,7 +222,8 @@ private:
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
         }
         
-        vkDestroyCommandPool(device, commandPool, nullptr);
+        vkDestroyCommandPool(device, graphicsCommandPool, nullptr);
+        vkDestroyCommandPool(device, transferCommandPool, nullptr);
 
         vkDestroyDevice(device, nullptr);
         
@@ -441,9 +452,21 @@ private:
         
         int i = 0;
         for (const auto& queueFamily : queueFamilies) {
-            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                indices.graphicsFamily = i;
+            // Graphics and transfer
+            if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+                if (!indices.graphicsFamily.has_value() && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                    indices.graphicsFamily = i;
+                }
+                // Look for a queue family that supports transfer that isn't the current graphics queue
+                if (indices.graphicsFamily.has_value() && indices.graphicsFamily.value() != i && queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT) {
+                    indices.transferFamily = i;
+                }
+            } else {
+                if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                    indices.graphicsFamily = i;
+                }
             }
+            // Presentation
             VkBool32 presentSupport = false;
             vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
             if (presentSupport) {
@@ -502,6 +525,9 @@ private:
         
         std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
         std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            uniqueQueueFamilies.insert(indices.transferFamily.value());
+        }
         
         float queuePriority = 1.0f;
         for (uint32_t queueFamily : uniqueQueueFamilies) {
@@ -533,6 +559,9 @@ private:
         // Get device queues
         vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
         vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            vkGetDeviceQueue(device, indices.transferFamily.value(), 0, &transferQueue);
+        }
     }
     
     // ================ createSwapChain() ================
@@ -561,12 +590,16 @@ private:
         createInfo.imageArrayLayers = 1;
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         
-        QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-        uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
-        if (indices.graphicsFamily != indices.presentFamily) {
+        QueueFamilyIndices queueFamilies = findQueueFamilies(physicalDevice);
+        std::set<uint32_t> uniqueQueueFamilyIndices = {queueFamilies.graphicsFamily.value(), queueFamilies.presentFamily.value()};
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            uniqueQueueFamilyIndices.insert(queueFamilies.transferFamily.value());
+        }
+        std::vector<uint32_t> queueFamilyIndices(uniqueQueueFamilyIndices.begin(), uniqueQueueFamilyIndices.end());
+        if (queueFamilyIndices.size() > 1) {
             createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-            createInfo.queueFamilyIndexCount = 2;
-            createInfo.pQueueFamilyIndices = queueFamilyIndices;
+            createInfo.queueFamilyIndexCount = static_cast<uint32_t>(queueFamilyIndices.size());
+            createInfo.pQueueFamilyIndices = queueFamilyIndices.data();
         } else {
             createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
             createInfo.queueFamilyIndexCount = 1;
@@ -783,7 +816,7 @@ private:
         viewportStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         viewportStateInfo.viewportCount = 1;
         viewportStateInfo.scissorCount = 1;
-        if (!dynamicViewportScissor) {
+        if (!DYNAMIC_VIEWPORT_SCISSOR) {
             viewportStateInfo.pViewports = &viewport;
             viewportStateInfo.pScissors = &scissor;
         }
@@ -863,7 +896,7 @@ private:
         graphicsPipelineInfo.pMultisampleState = &multisampleInfo;
         graphicsPipelineInfo.pDepthStencilState = nullptr;
         graphicsPipelineInfo.pColorBlendState = &colorBlendInfo;
-        if (dynamicViewportScissor) {
+        if (DYNAMIC_VIEWPORT_SCISSOR) {
             graphicsPipelineInfo.pDynamicState = &dynamicStateInfo;
         } else {
             graphicsPipelineInfo.pDynamicState = nullptr;
@@ -920,53 +953,96 @@ private:
     }
     
     // ================ createCommandPool() ================
-    void createCommandPool() {
+    void createCommandPools() {
         QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
         
-        VkCommandPoolCreateInfo commandPoolInfo{};
-        commandPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        commandPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; // Since we will record a command buffer every frame, want to be able to reset and rerecord over it
-        commandPoolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value(); // Command pools only support command buffers submitted on a single type of queue; in this case, the graphics queue family
+        VkCommandPoolCreateInfo graphicsCommandPoolInfo{};
+        graphicsCommandPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        graphicsCommandPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; // Since we will record a command buffer every frame, want to be able to reset and rerecord over it
+        graphicsCommandPoolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value(); // Command pools only support command buffers submitted on a single type of queue; in this case, the graphics queue family
         
-        if (vkCreateCommandPool(device, &commandPoolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+        if (vkCreateCommandPool(device, &graphicsCommandPoolInfo, nullptr, &graphicsCommandPool) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create command pool!");
+        }
+        
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            VkCommandPoolCreateInfo transferCommandPoolInfo{};
+            transferCommandPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            transferCommandPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT; // Since we will record a command buffer every frame, want to be able to reset and rerecord over it. TRANSIENT_BIT allows implementation to optimize memory allocation for short-lived buffers (i.e., the staging buffer)
+            transferCommandPoolInfo.queueFamilyIndex = queueFamilyIndices.transferFamily.value(); // Command pools only support command buffers submitted on a single type of queue; in this case, the transfer queue family
+            
+            if (vkCreateCommandPool(device, &transferCommandPoolInfo, nullptr, &transferCommandPool) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to create command pool!");
+            }
         }
     }
     
     // ================ createVertexBuffer() ================
     void createVertexBuffer() {
+        VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+        
+        // Create/allocate the staging buffer - on CPU
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+        
+        // Fill the staging buffer
+        // - Can also fill the vertex buffer directly if HOST_COHERENT_BIT and HOST_VISIBLE_BIT were set on it. The HOST_COHERENT_BIT ensures allocated memory in memory heap matches the mapped memory (i.e., there are no delays due to caching). Can use VkFlushMappedMemoryRanges and VkInvalidateMappedMemoryRanges to control transfer to GPU. Otherwise, transfer to GPU occurs in the background and specification guarantees that this is completed as of the next VkQueueSubmit call.
+        void* data;
+        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);  // Temporarily map bufferMemory to data ptr. Can also use VK_WHOLE_SIZE?
+        memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
+        vkUnmapMemory(device, stagingBufferMemory);
+        
+        // Create/allocate vertex buffer - local to GPU
+        // - Can't map, but can transfer (copy) data into it
+        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
+        
+        // Copy from staging buffer (CPU) to vertex buffer (GPU)
+        copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+        
+        // Free staging buffer memory
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
         // Create buffer
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size = sizeof(vertices[0]) * vertices.size();
-        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Exclusive access to graphics queue
+        bufferInfo.size = size;
+        bufferInfo.usage = usage;
         
-        if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
+        QueueFamilyIndices queueFamilies = findQueueFamilies(physicalDevice);
+        std::vector<uint32_t> queueFamilyIndices;
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            queueFamilyIndices = {queueFamilies.graphicsFamily.value(), queueFamilies.transferFamily.value()};
+            bufferInfo.queueFamilyIndexCount = static_cast<uint32_t>(queueFamilyIndices.size());
+            bufferInfo.pQueueFamilyIndices = queueFamilyIndices.data();
+        } else {
+            bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Exclusive access to graphics queue
+        }
+        
+        if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create vertex buffer!");
         }
         
         // Allocate memory for the buffer
         VkMemoryRequirements memoryRequirements;
-        vkGetBufferMemoryRequirements(device, vertexBuffer, &memoryRequirements);
+        vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
         
         VkMemoryAllocateInfo allocateInfo{};
         allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocateInfo.allocationSize = memoryRequirements.size;
-        allocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        allocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, properties);
         
-        if (vkAllocateMemory(device, &allocateInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
+        // Realistically, should combine buffers and call this on groups of buffers (i.e., objects) so that the maxMemoryAllocationCount physical device limit isn't reached
+        // - Can use VulkanMemoryAllocator library for this
+        if (vkAllocateMemory(device, &allocateInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
             throw std::runtime_error("Failed to allocate vertex buffer memory!");
         }
         
         // Bind the allocated memory to the buffer
-        vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
-        
-        // Fill the buffer
-        void* data;
-        vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);  // Temporarily map vertexBufferMemory to data ptr
-        memcpy(data, vertices.data(), static_cast<size_t>(bufferInfo.size));    // We used HOST_COHERENT_BIT to ensure allocated memory in memory heap matches the mapped memory (i.e., there are no delays due to caching). Could have also used VkFlushMappedMemoryRanges and VkInvalidateMappedMemoryRanges. Transfer to GPU occurs in the background and specification guarantees that this is completed as of the next VkQueueSubmit call.
-        vkUnmapMemory(device, vertexBufferMemory);
+        vkBindBufferMemory(device, buffer, bufferMemory, 0);
     }
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
         VkPhysicalDeviceMemoryProperties memoryProperties;
@@ -979,19 +1055,81 @@ private:
         }
         throw std::runtime_error("Failed to find suitable memory type!");
     }
+    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+        // Execute the copy using a command buffer
+        
+        // Allocate command buffer
+        VkCommandBufferAllocateInfo allocateInfo{};
+        allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            allocateInfo.commandPool = transferCommandPool; // May want to create a separate command pool with VK_COMMAND_POOL_CREATE_TRANSIENT_BIT set
+        } else {
+            allocateInfo.commandPool = graphicsCommandPool; // May want to create a separate command pool with VK_COMMAND_POOL_CREATE_TRANSIENT_BIT set
+        }
+        allocateInfo.commandBufferCount = 1;
+        
+        VkCommandBuffer commandBuffer;
+        vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer);
+        
+        // Record command buffer
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+        
+        VkBufferCopy copyRegion{};
+        copyRegion.srcOffset = 0;
+        copyRegion.dstOffset = 0;
+        copyRegion.size = size;
+        vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+        
+        vkEndCommandBuffer(commandBuffer);
+        
+        // Submit command buffer to appropriate queue
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+        
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            vkQueueSubmit(transferQueue, 1, &submitInfo, VK_NULL_HANDLE);
+            vkQueueWaitIdle(transferQueue); // Could also use vkWaitForFences
+            vkFreeCommandBuffers(device, transferCommandPool, 1, &commandBuffer);
+        } else {
+            vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+            vkQueueWaitIdle(graphicsQueue); // Could also use vkWaitForFences
+            vkFreeCommandBuffers(device, graphicsCommandPool, 1, &commandBuffer);
+        }
+    }
     
     // ================ createCommandBuffer() ================
     void createCommandBuffers() {
-        commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+        graphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
         
-        VkCommandBufferAllocateInfo allocateInfo{};
-        allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocateInfo.commandPool = commandPool;
-        allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // Can be submitted directly to a queue, can't be called from other command buffers
-        allocateInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
+        VkCommandBufferAllocateInfo graphicsAllocateInfo{};
+        graphicsAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        graphicsAllocateInfo.commandPool = graphicsCommandPool;
+        graphicsAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // Can be submitted directly to a queue, can't be called from other command buffers
+        graphicsAllocateInfo.commandBufferCount = static_cast<uint32_t>(graphicsCommandBuffers.size());
         
-        if (vkAllocateCommandBuffers(device, &allocateInfo, commandBuffers.data()) != VK_SUCCESS) {
+        if (vkAllocateCommandBuffers(device, &graphicsAllocateInfo, graphicsCommandBuffers.data()) != VK_SUCCESS) {
             throw std::runtime_error("Failed to allocate command buffers!");
+        }
+        
+        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
+            transferCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+            
+            VkCommandBufferAllocateInfo transferAllocateInfo{};
+            transferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            transferAllocateInfo.commandPool = transferCommandPool;
+            transferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // Can be submitted directly to a queue, can't be called from other command buffers
+            transferAllocateInfo.commandBufferCount = static_cast<uint32_t>(transferCommandBuffers.size());
+            
+            if (vkAllocateCommandBuffers(device, &transferAllocateInfo, transferCommandBuffers.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to allocate command buffers!");
+            }
         }
     }
 
@@ -1023,7 +1161,7 @@ private:
         // Draw!
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
         
-        if (dynamicViewportScissor) {
+        if (DYNAMIC_VIEWPORT_SCISSOR) {
             VkViewport viewport{};
             viewport.x = 0.0f;
             viewport.y = 0.0f;
@@ -1102,8 +1240,8 @@ private:
         vkResetFences(device, 1, &inFlightFences[currentFrame]); // To prevent deadlock, don't reset fence (put back in unsignaled state) until we know vkQueueSubmit will be called and signal it
         
         // 3. Record a command buffer to draw the scene onto that image
-        vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-        recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+        vkResetCommandBuffer(graphicsCommandBuffers[currentFrame], 0);
+        recordCommandBuffer(graphicsCommandBuffers[currentFrame], imageIndex);
         
         // 4. Submit the recorded command buffer
         VkSubmitInfo submitInfo{};
@@ -1118,7 +1256,7 @@ private:
         submitInfo.pWaitDstStageMask = waitStages;
         
         submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
+        submitInfo.pCommandBuffers = &graphicsCommandBuffers[currentFrame];
         
         VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
         submitInfo.signalSemaphoreCount = 1;
