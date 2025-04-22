@@ -106,9 +106,14 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+};
+
+const std::vector<uint16_t> indices = {
+    0, 1, 2, 2, 3, 0
 };
 
 class HelloTriangleApplication {
@@ -172,8 +177,11 @@ private:
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
     bool framebufferResized = false;
+    // Vertex and index buffers
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
+    VkBuffer indexBuffer;
+    VkDeviceMemory indexBufferMemory;
     
     void initWindow() {
         glfwInit();
@@ -196,6 +204,7 @@ private:
         createFramebuffers();
         createCommandPools();
         createVertexBuffer();
+        createIndexBuffer();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -208,6 +217,9 @@ private:
     }
     void cleanup() {
         cleanupSwapchain();
+        
+        vkDestroyBuffer(device, indexBuffer, nullptr);
+        vkFreeMemory(device, indexBufferMemory, nullptr);  // Free once buffer is no longer used (i.e., destroyed)
         
         vkDestroyBuffer(device, vertexBuffer, nullptr);
         vkFreeMemory(device, vertexBufferMemory, nullptr);  // Free once buffer is no longer used (i.e., destroyed)
@@ -1104,6 +1116,34 @@ private:
         }
     }
     
+    // ================ createIndexBuffer() ================
+    void createIndexBuffer() {
+        VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+        
+        // Create/allocate the staging buffer - on CPU
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+        
+        // Fill the staging buffer
+        // - Can also fill the index buffer directly if HOST_COHERENT_BIT and HOST_VISIBLE_BIT were set on it. The HOST_COHERENT_BIT ensures allocated memory in memory heap matches the mapped memory (i.e., there are no delays due to caching). Can use VkFlushMappedMemoryRanges and VkInvalidateMappedMemoryRanges to control transfer to GPU. Otherwise, transfer to GPU occurs in the background and specification guarantees that this is completed as of the next VkQueueSubmit call.
+        void* data;
+        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);  // Temporarily map bufferMemory to data ptr. Can also use VK_WHOLE_SIZE?
+        memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
+        vkUnmapMemory(device, stagingBufferMemory);
+        
+        // Create/allocate index buffer - local to GPU
+        // - Can't map, but can transfer (copy) data into it
+        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
+        
+        // Copy from staging buffer (CPU) to index buffer (GPU)
+        copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+        
+        // Free staging buffer memory
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+    
     // ================ createCommandBuffer() ================
     void createCommandBuffers() {
         graphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
@@ -1130,65 +1170,6 @@ private:
             if (vkAllocateCommandBuffers(device, &transferAllocateInfo, transferCommandBuffers.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Failed to allocate command buffers!");
             }
-        }
-    }
-
-    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
-        // Begin recording command buffer
-        VkCommandBufferBeginInfo commandBufferBeginInfo{};
-        commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        commandBufferBeginInfo.flags = 0;
-        commandBufferBeginInfo.pInheritanceInfo = nullptr; // Only for secondary command buffers
-        
-        if (vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to begin recording command buffer!");
-        }
-        
-        // Begin render pass
-        VkRenderPassBeginInfo renderPassBeginInfo{};
-        renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassBeginInfo.renderPass = renderPass;
-        renderPassBeginInfo.framebuffer = swapchainFramebuffers[imageIndex];
-        renderPassBeginInfo.renderArea.offset = {0,0};
-        renderPassBeginInfo.renderArea.extent = swapchainExtent;
-        
-        VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 0.0f}}};
-        renderPassBeginInfo.clearValueCount = 1;
-        renderPassBeginInfo.pClearValues = &clearColor; // Used for VK_ATTACHMENT_LOAD_OP_CLEAR of the framebuffer's color attachment
-        
-        vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE); // Embed render pass commands in primary command buffer without executing any secondary command buffers
-        
-        // Draw!
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-        
-        if (DYNAMIC_VIEWPORT_SCISSOR) {
-            VkViewport viewport{};
-            viewport.x = 0.0f;
-            viewport.y = 0.0f;
-            viewport.width = static_cast<float>(swapchainExtent.width);
-            viewport.height = static_cast<float>(swapchainExtent.height);
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-            vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-            
-            VkRect2D scissor{};
-            scissor.offset = {0,0};
-            scissor.extent = swapchainExtent;
-            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-        }
-        
-        VkBuffer vertexBuffers[] = {vertexBuffer};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-        
-        vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0); // specify count/first of vertices and instances
-        
-        // End render pass
-        vkCmdEndRenderPass(commandBuffer);
-        
-        // End command buffer
-        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to end recording command buffer!");
         }
     }
     
@@ -1290,6 +1271,66 @@ private:
         }
         
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+        // Begin recording command buffer
+        VkCommandBufferBeginInfo commandBufferBeginInfo{};
+        commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        commandBufferBeginInfo.flags = 0;
+        commandBufferBeginInfo.pInheritanceInfo = nullptr; // Only for secondary command buffers
+        
+        if (vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to begin recording command buffer!");
+        }
+        
+        // Begin render pass
+        VkRenderPassBeginInfo renderPassBeginInfo{};
+        renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassBeginInfo.renderPass = renderPass;
+        renderPassBeginInfo.framebuffer = swapchainFramebuffers[imageIndex];
+        renderPassBeginInfo.renderArea.offset = {0,0};
+        renderPassBeginInfo.renderArea.extent = swapchainExtent;
+        
+        VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 0.0f}}};
+        renderPassBeginInfo.clearValueCount = 1;
+        renderPassBeginInfo.pClearValues = &clearColor; // Used for VK_ATTACHMENT_LOAD_OP_CLEAR of the framebuffer's color attachment
+        
+        vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE); // Embed render pass commands in primary command buffer without executing any secondary command buffers
+        
+        // Draw!
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        
+        if (DYNAMIC_VIEWPORT_SCISSOR) {
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = static_cast<float>(swapchainExtent.width);
+            viewport.height = static_cast<float>(swapchainExtent.height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+            
+            VkRect2D scissor{};
+            scissor.offset = {0,0};
+            scissor.extent = swapchainExtent;
+            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+        }
+        
+        VkBuffer vertexBuffers[] = {vertexBuffer};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+        
+        vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0); // Use vkCmdDraw for non-indexed drawing
+        
+        // End render pass
+        vkCmdEndRenderPass(commandBuffer);
+        
+        // End command buffer
+        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to end recording command buffer!");
+        }
     }
     void recreateSwapchain() {
         int iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED);
