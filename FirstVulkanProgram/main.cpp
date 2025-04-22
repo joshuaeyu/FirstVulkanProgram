@@ -99,7 +99,7 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
     {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
 };
@@ -162,6 +162,8 @@ private:
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
     bool framebufferResized = false;
+    VkBuffer vertexBuffer;
+    VkDeviceMemory vertexBufferMemory;
     
     void initWindow() {
         glfwInit();
@@ -183,6 +185,7 @@ private:
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPool();
+        createVertexBuffer();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -195,6 +198,9 @@ private:
     }
     void cleanup() {
         cleanupSwapchain();
+        
+        vkDestroyBuffer(device, vertexBuffer, nullptr);
+        vkFreeMemory(device, vertexBufferMemory, nullptr);  // Free once buffer is no longer used (i.e., destroyed)
         
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -926,7 +932,54 @@ private:
             throw std::runtime_error("Failed to create command pool!");
         }
     }
-
+    
+    // ================ createVertexBuffer() ================
+    void createVertexBuffer() {
+        // Create buffer
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = sizeof(vertices[0]) * vertices.size();
+        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Exclusive access to graphics queue
+        
+        if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create vertex buffer!");
+        }
+        
+        // Allocate memory for the buffer
+        VkMemoryRequirements memoryRequirements;
+        vkGetBufferMemoryRequirements(device, vertexBuffer, &memoryRequirements);
+        
+        VkMemoryAllocateInfo allocateInfo{};
+        allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocateInfo.allocationSize = memoryRequirements.size;
+        allocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        
+        if (vkAllocateMemory(device, &allocateInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate vertex buffer memory!");
+        }
+        
+        // Bind the allocated memory to the buffer
+        vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+        
+        // Fill the buffer
+        void* data;
+        vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);  // Temporarily map vertexBufferMemory to data ptr
+        memcpy(data, vertices.data(), static_cast<size_t>(bufferInfo.size));    // We used HOST_COHERENT_BIT to ensure allocated memory in memory heap matches the mapped memory (i.e., there are no delays due to caching). Could have also used VkFlushMappedMemoryRanges and VkInvalidateMappedMemoryRanges. Transfer to GPU occurs in the background and specification guarantees that this is completed as of the next VkQueueSubmit call.
+        vkUnmapMemory(device, vertexBufferMemory);
+    }
+    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+        VkPhysicalDeviceMemoryProperties memoryProperties;
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+        
+        for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
+            if (typeFilter & (1 << i) && (memoryProperties.memoryTypes[i].propertyFlags & properties)) {
+                return i;
+            }
+        }
+        throw std::runtime_error("Failed to find suitable memory type!");
+    }
+    
     // ================ createCommandBuffer() ================
     void createCommandBuffers() {
         commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
@@ -941,7 +994,7 @@ private:
             throw std::runtime_error("Failed to allocate command buffers!");
         }
     }
-    
+
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
         // Begin recording command buffer
         VkCommandBufferBeginInfo commandBufferBeginInfo{};
@@ -986,7 +1039,11 @@ private:
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
         }
         
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0); // Vertex data is currently hardcoded into vertex shader
+        VkBuffer vertexBuffers[] = {vertexBuffer};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        
+        vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0); // specify count/first of vertices and instances
         
         // End render pass
         vkCmdEndRenderPass(commandBuffer);
