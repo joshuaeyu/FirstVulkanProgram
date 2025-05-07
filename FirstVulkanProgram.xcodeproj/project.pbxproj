@@ -39,22 +39,9 @@
 		E4F0B72C2D6ED03100651BB2 /* libglfw.3.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libglfw.3.dylib; path = ../../../../../../usr/local/lib/libglfw.3.dylib; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		E4EBA8542D6E538C00E98E10 /* Exceptions for "FirstVulkanProgram" folder in "FirstVulkanProgram" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Old/main.cpp,
-			);
-			target = E481F38B2D6E348300C06587 /* FirstVulkanProgram */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E481F38E2D6E348300C06587 /* FirstVulkanProgram */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				E4EBA8542D6E538C00E98E10 /* Exceptions for "FirstVulkanProgram" folder in "FirstVulkanProgram" target */,
-			);
 			path = FirstVulkanProgram;
 			sourceTree = "<group>";
 		};
@@ -323,6 +310,7 @@
 				HEADER_SEARCH_PATHS = (
 					/usr/local/include,
 					/Users/joshuayu/VulkanSDK/1.4.309.0/macOS/include,
+					/Users/joshuayu/Documents/Programming/Vulkan/FirstVulkanProgram/FirstVulkanProgram/vendor,
 				);
 				LD_RUNPATH_SEARCH_PATHS = (
 					/usr/local/lib,
@@ -342,6 +330,7 @@
 				HEADER_SEARCH_PATHS = (
 					/usr/local/include,
 					/Users/joshuayu/VulkanSDK/1.4.309.0/macOS/include,
+					/Users/joshuayu/Documents/Programming/Vulkan/FirstVulkanProgram/FirstVulkanProgram/vendor,
 				);
 				LD_RUNPATH_SEARCH_PATHS = (
 					/usr/local/lib,
