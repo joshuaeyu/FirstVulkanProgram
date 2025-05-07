@@ -88,6 +88,7 @@ struct SwapchainSupportDetails {
 struct Vertex {
     glm::vec2 pos;
     glm::vec3 color;
+    glm::vec2 texCoord;
     
     static VkVertexInputBindingDescription getBindingDescription() {
         VkVertexInputBindingDescription bindingDescription{};
@@ -98,26 +99,32 @@ struct Vertex {
         return bindingDescription;
     }
     
-    static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
         attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
         attributeDescriptions[0].offset = offsetof(Vertex, pos);
+        
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].location = 1;
         attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
         attributeDescriptions[1].offset = offsetof(Vertex, color);
+        
+        attributeDescriptions[2].binding = 0;
+        attributeDescriptions[2].location = 2;
+        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
         
         return attributeDescriptions;
     };
 };
 
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
 };
 
 const std::vector<uint16_t> indices = {
@@ -225,26 +232,34 @@ private:
         glfwSetWindowIconifyCallback(window, windowIconifyCallback);
     }
     void initVulkan() {
+        // Instance
         createInstance();
         setupDebugMessenger();
+        // Physical device and logical device
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
+        // Swapchain
         createSwapchain();
         createImageViews();
+        // Pipeline
         createRenderPass();
         createDescriptorSetLayout();
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPools();
+        // Texture
         createTextureImage();
         createTextureImageView();
         createTextureSampler();
+        // Buffers
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
+        // Descriptors
         createDescriptorPool();
         createDescriptorSets();
+        // Command buffers and drawing
         createCommandBuffers();
         createSyncObjects();
     }
@@ -614,7 +629,7 @@ private:
         VkPhysicalDeviceFeatures deviceFeatures{};
         deviceFeatures.samplerAnisotropy = VK_TRUE;
         
-        // Logical device create info
+        // Logical device create info (queues, features, extensions)
         VkDeviceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
@@ -655,10 +670,10 @@ private:
         // Create swap chain
         VkSwapchainCreateInfoKHR createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        createInfo.surface = surface;
-        createInfo.minImageCount = imageCount;
-        createInfo.imageFormat = surfaceFormat.format;
-        createInfo.imageExtent = extent;
+        createInfo.surface = surface; // Based on window library (GLFW)
+        createInfo.minImageCount = imageCount; // Based on capabilities
+        createInfo.imageFormat = surfaceFormat.format; // Want SRGBA
+        createInfo.imageExtent = extent; // Based on capabilities
         createInfo.imageArrayLayers = 1;
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         
@@ -681,7 +696,7 @@ private:
         createInfo.preTransform = swapchainSupport.capabilities.currentTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         
-        createInfo.presentMode = presentMode;
+        createInfo.presentMode = presentMode; // Want MAILBOX
         createInfo.clipped = VK_TRUE;
         
         createInfo.oldSwapchain = VK_NULL_HANDLE;   // if swap chain becomes invalid/unoptimized (e.g., window is resized)
@@ -695,7 +710,7 @@ private:
         swapchainImages.resize(imageCount);
         vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data());
         
-        // Store surface format and extent for later uses
+        // Store surface format and extent for later use
         swapchainImageFormat = surfaceFormat.format;
         swapchainExtent = extent;
         
@@ -739,6 +754,11 @@ private:
     
     // ================ createImageViews() ================
     void createImageViews() {
+        // Create swap chain image views to be used by corresponding framebuffers
+        
+        // Swap chain contains images, each with a corresponding image view
+        // Render pass renders to framebuffers, which each have an image view attachment
+        
         swapchainImageViews.resize(swapchainImages.size());
         for (size_t i = 0; i < swapchainImages.size(); i++) {
             swapchainImageViews[i] = createImageView(swapchainImages[i], swapchainImageFormat);
@@ -799,6 +819,10 @@ private:
     
     // ================ createDescriptorSetLayout() ================
     void createDescriptorSetLayout() {
+        // Used in descriptor sets; contains descriptor set layout bindings
+        // Must be used in pipeline layout
+        // For uniform buffers, image samplers, etc.
+        
         VkDescriptorSetLayoutBinding uboLayoutBinding{};
         uboLayoutBinding.binding = 0;
         uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -806,10 +830,18 @@ private:
         uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         uboLayoutBinding.pImmutableSamplers = nullptr;  // for image sampling
         
+        VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+        samplerLayoutBinding.binding = 1;
+        samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerLayoutBinding.descriptorCount = 1;
+        samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        samplerLayoutBinding.pImmutableSamplers = nullptr;  // for image sampling
+        
+        std::array<VkDescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount = 1;
-        layoutInfo.pBindings = &uboLayoutBinding;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
         
         if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout)) {
             throw std::runtime_error("Failed to create descriptor set layout!");
@@ -949,7 +981,7 @@ private:
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{}; // For uniforms
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutInfo.setLayoutCount = 1;
-        pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;  // ubo
+        pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;  // uniform buffer, image sampler
         pipelineLayoutInfo.pushConstantRangeCount = 0;
         pipelineLayoutInfo.pPushConstantRanges = nullptr;
         
@@ -1003,6 +1035,8 @@ private:
     
     // ================ createFramebuffers() ================
     void createFramebuffers() {
+        // Create swap chain framebuffers to be used by render pass
+        
         swapchainFramebuffers.resize(swapchainImageViews.size());
         
         for (size_t i = 0; i < swapchainImageViews.size(); i++) {
@@ -1447,14 +1481,19 @@ private:
     }
     
     void createDescriptorPool() {
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        // Contains descriptor sets
+        // Used for uniform buffers, image samplers, etc.
+        
+        std::array<VkDescriptorPoolSize, 2> poolSizes{};
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT); // Depending on driver, may allow allocation beyond this count. Should use Best Practices Validation to avoid exceeding this limit!
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT); // Depending on driver, may allow allocation beyond this count. Should use Best Practices Validation to avoid exceeding this limit!
         
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes = &poolSize;
+        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        poolInfo.pPoolSizes = poolSizes.data();
         poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
         
         if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
@@ -1462,6 +1501,9 @@ private:
         }
     }
     void createDescriptorSets() {
+        // Reside in descriptor pools; use descriptor set layouts
+        // Used for uniform buffers, image samplers, etc.
+        
         std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
         VkDescriptorSetAllocateInfo allocateInfo{};
         allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1475,23 +1517,42 @@ private:
         }
         
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            // Uniform buffer data
             VkDescriptorBufferInfo bufferInfo{};
             bufferInfo.buffer = uniformBuffers[i];
             bufferInfo.offset = 0;
             bufferInfo.range = sizeof(UniformBufferObject); // or VK_WHOLE_SIZE
             
-            VkWriteDescriptorSet descriptorWrite{};
-            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrite.dstSet = descriptorSets[i];
-            descriptorWrite.dstBinding = 0; // The static binding we specified in the descriptor set layout
-            descriptorWrite.dstArrayElement = 0; // More relevant if we had an array of descriptors (UBOs)
-            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorWrite.descriptorCount = 1; // How many array elements to update
-            descriptorWrite.pBufferInfo = &bufferInfo;
-            descriptorWrite.pImageInfo = nullptr; // For descriptors that refer to image data
-            descriptorWrite.pTexelBufferView = nullptr; // For descriptors that refer to buffer views
+            // Image sampler data
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView = textureImageView;
+            imageInfo.sampler = textureSampler;
             
-            vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr); // Can also use to copy descriptors to each other
+            // Update descriptor set i
+            std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+            // Uniform buffer descriptor info
+            descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[0].dstSet = descriptorSets[i];
+            descriptorWrites[0].dstBinding = 0; // The static binding we specified in the descriptor set layout
+            descriptorWrites[0].dstArrayElement = 0; // More relevant if we had an array of descriptors (UBOs)
+            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrites[0].descriptorCount = 1; // How many array elements to update
+            descriptorWrites[0].pBufferInfo = &bufferInfo;
+            descriptorWrites[0].pImageInfo = nullptr; // For descriptors that refer to image data
+            descriptorWrites[0].pTexelBufferView = nullptr; // For descriptors that refer to buffer views
+            // Image sampler descriptor info
+            descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[1].dstSet = descriptorSets[i];
+            descriptorWrites[1].dstBinding = 1; // The static binding we specified in the descriptor set layout
+            descriptorWrites[1].dstArrayElement = 0; // More relevant if we had an array of descriptors
+            descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorWrites[1].descriptorCount = 1; // How many array elements to update
+            descriptorWrites[1].pBufferInfo = nullptr;
+            descriptorWrites[1].pImageInfo = &imageInfo; // For descriptors that refer to image data
+            descriptorWrites[1].pTexelBufferView = nullptr; // For descriptors that refer to buffer views
+            
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr); // Can also use to copy descriptors to each other
         }
     }
     
