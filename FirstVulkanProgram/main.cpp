@@ -230,9 +230,8 @@ private:
     // Drawing
     std::vector<VkFramebuffer> swapchainFramebuffers;
     VkCommandPool graphicsCommandPool;
-    VkCommandPool transferCommandPool;
+    VkCommandPool transferCommandPool; // Transfer command buffers are created on the fly, and are temporary/transient
     std::vector<VkCommandBuffer> graphicsCommandBuffers;
-    std::vector<VkCommandBuffer> transferCommandBuffers;
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
@@ -287,18 +286,18 @@ private:
         createLogicalDevice();
         // Swapchain
         createSwapchain();
-        createImageViews();
+        createSwapchainImageViews();
         // Pipeline
-        createRenderPass();
-        createDescriptorSetLayout();
+        createRenderPass(); // Render pass "description"
+        createDescriptorSetLayout(); // Uniforms, samplers, etc.
         createGraphicsPipeline();
         createCommandPools();
-        // Depth
+        // Framebuffers and attachments
         createColorResources();
         createDepthResources();
-        createFramebuffers();
+        createFramebuffers(); // Uses image views as attachments
         // Texture
-        createTextureImage();
+        createTextureImage(); // Includes mipmap generation
         createTextureImageView();
         createTextureSampler();
         // Buffers
@@ -729,11 +728,11 @@ private:
         }
     }
     
-    // ================ createSwapChain() ================
+    // ================ createSwapchain() ================
     void createSwapchain() {
         // Query capabilities, surface formats, present modes of physical device
         SwapchainSupportDetails swapchainSupport = querySwapchainSupport(physicalDevice);
-        
+
         // Pick surface format and present mode
         VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapchainSupport.formats);
         VkPresentModeKHR presentMode = chooseSwapPresentMode(swapchainSupport.presentModes);
@@ -755,6 +754,7 @@ private:
         createInfo.imageArrayLayers = 1;
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         
+        // Determine number of unique queue families and set sharing mode accordingly
         QueueFamilyIndices queueFamilies = findQueueFamilies(physicalDevice);
         std::set<uint32_t> uniqueQueueFamilyIndices = {queueFamilies.graphicsFamily.value(), queueFamilies.presentFamily.value()};
         if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
@@ -767,15 +767,15 @@ private:
             createInfo.pQueueFamilyIndices = queueFamilyIndices.data();
         } else {
             createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            createInfo.queueFamilyIndexCount = 1;
-            createInfo.pQueueFamilyIndices = nullptr;
+//            createInfo.queueFamilyIndexCount = 1; // Optional
+//            createInfo.pQueueFamilyIndices = nullptr; // Optional
         }
         
-        createInfo.preTransform = swapchainSupport.capabilities.currentTransform;
-        createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        createInfo.preTransform = swapchainSupport.capabilities.currentTransform; // E.g., VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR
+        createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR; // If alpha channel should beused for blending with other windows in the window system
         
         createInfo.presentMode = presentMode; // Want MAILBOX
-        createInfo.clipped = VK_TRUE;
+        createInfo.clipped = VK_TRUE; // We don't care about pixels that are obscured (by other windows)
         
         createInfo.oldSwapchain = VK_NULL_HANDLE;   // if swap chain becomes invalid/unoptimized (e.g., window is resized)
         
@@ -830,9 +830,9 @@ private:
         }
     }
     
-    // ================ createImageViews() ================
-    void createImageViews() {
-        // Create swap chain image views to be used by corresponding framebuffers
+    // ================ createSwapchainImageViews() ================
+    void createSwapchainImageViews() {
+        // Create swap chain image views to be used as framebuffer attachments
         
         // Swap chain contains images, each with a corresponding image view
         // Render pass renders to framebuffers, which each have an image view attachment
@@ -845,7 +845,11 @@ private:
     
     // ================ createRenderPass() ================
     void createRenderPass() {
-        // Color attachment
+        // Create (the abstract properties and requirements of) the render pass
+        // - This doesn't contain references to any images, image views, framebuffers etc. that we've created
+        // - This is just a description of how the render pass will work, NOT what specific object instances it will work on
+        
+        // Color attachment description
         VkAttachmentDescription colorAttachment{};
         colorAttachment.format = swapchainImageFormat;
         colorAttachment.samples = msaaSamples; // Multi-sampling
@@ -854,9 +858,9 @@ private:
         colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; // Image layout needs to be suitable for next operation (for immediate presentation, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; for a MSAA buffer that needs to be resolved, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; // Image layout needs to be suitable for next operation (for a MSAA buffer that needs to be resolved, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
         
-        // Depth attachment
+        // Depth attachment description
         VkAttachmentDescription depthAttachment{};
         depthAttachment.format = findDepthFormat();
         depthAttachment.samples = msaaSamples; // Multi-sampling
@@ -867,7 +871,7 @@ private:
         depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL; // Image layout needs to be suitable for next operation
         
-        // Color resolve attachment
+        // Color resolve attachment description (for MSAA)
         VkAttachmentDescription colorAttachmentResolve{};
         colorAttachmentResolve.format = swapchainImageFormat;
         colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT; // Multi-sampling
@@ -876,9 +880,9 @@ private:
         colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // Image layout needs to be suitable for next operation (for immediate presentation, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; for a MSAA buffer that needs to be resolved, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+        colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // Image layout needs to be suitable for next operation (for immediate presentation, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
         
-        // Subpass
+        // Attachment references
         VkAttachmentReference colorAttachmentRef{};
         colorAttachmentRef.attachment = 0; // Attachment index in VkAttachmentDescription array of VkRenderPassCreateInfo (createInfo.pAttachments)
         colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; // Attachment will be used as a color buffer
@@ -889,6 +893,7 @@ private:
         colorAttachmentResolveRef.attachment = 2; // Attachment index in VkAttachmentDescription array of VkRenderPassCreateInfo (createInfo.pAttachments)
         colorAttachmentResolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; // Attachment will be used as a color buffer
         
+        // Subpass description
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // Graphics, ray tracing, or compute
         subpass.colorAttachmentCount = 1;
@@ -900,6 +905,7 @@ private:
         subpass.preserveAttachmentCount = 0;
         subpass.pPreserveAttachments = nullptr;
         
+        // Subpass dependency
         // Can instead specify VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT as a wait stage for VkQueueSubmit()
         VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL; // The implicit subpass before the render pass
@@ -912,11 +918,11 @@ private:
             // Allow subpass to write to color and depth attachments
         
         // Create render pass using attachments, subpass, and dependency
-        std::array<VkAttachmentDescription, 3> attachments = {colorAttachment, depthAttachment, colorAttachmentResolve};
+        std::array<VkAttachmentDescription, 3> attachmentDescriptions = {colorAttachment, depthAttachment, colorAttachmentResolve};
         VkRenderPassCreateInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-        renderPassInfo.pAttachments = attachments.data();
+        renderPassInfo.attachmentCount = static_cast<uint32_t>(attachmentDescriptions.size());
+        renderPassInfo.pAttachments = attachmentDescriptions.data();
         renderPassInfo.subpassCount = 1;
         renderPassInfo.pSubpasses = &subpass;
         renderPassInfo.dependencyCount = 1;
@@ -933,6 +939,7 @@ private:
         // Must be used in pipeline layout
         // For uniform buffers, image samplers, etc.
         
+        // UBO layout binding
         VkDescriptorSetLayoutBinding uboLayoutBinding{};
         uboLayoutBinding.binding = 0;
         uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -940,6 +947,7 @@ private:
         uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         uboLayoutBinding.pImmutableSamplers = nullptr;  // for image sampling
         
+        // Image sampler layout binding
         VkDescriptorSetLayoutBinding samplerLayoutBinding{};
         samplerLayoutBinding.binding = 1;
         samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -986,6 +994,7 @@ private:
         // ===== Fixed-function states =====
         
         // --- Vertex input ---
+        // Vertex attribute binding and format
         auto bindingDescription = Vertex::getBindingDescription();
         auto attributeDescriptions = Vertex::getAttributeDescriptions();
         VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
@@ -999,7 +1008,7 @@ private:
         VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo{};
         inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        inputAssemblyInfo.primitiveRestartEnable = VK_FALSE;    // For _STRIP topologies, allows breaking up of primitives using a special element buffer index 0xFFFF or 0xFFFFFF
+        inputAssemblyInfo.primitiveRestartEnable = VK_FALSE; // For _STRIP topologies, allows breaking up of primitives using a special element buffer index 0xFFFF or 0xFFFFFF
         
         // --- Viewport and scissor ---
         // Static (specify now)
@@ -1037,11 +1046,12 @@ private:
         }
         
         // --- Rasterizer ---
+        // Polygon type, culling, winding, depth bias
         VkPipelineRasterizationStateCreateInfo rasterizationInfo{};
         rasterizationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rasterizationInfo.depthClampEnable = VK_FALSE; // Don't clamp, discard
         rasterizationInfo.rasterizerDiscardEnable = VK_FALSE; // Yes, please rasterize
-        rasterizationInfo.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizationInfo.polygonMode = VK_POLYGON_MODE_FILL; // Fill, line, point
         rasterizationInfo.lineWidth = 1.0f;
         rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;
         rasterizationInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; // glm::perspective flips y coordinate!
@@ -1055,7 +1065,7 @@ private:
         multisampleInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         multisampleInfo.rasterizationSamples = msaaSamples;
         multisampleInfo.sampleShadingEnable = VK_TRUE; // Must be enabled at logical device creation
-        multisampleInfo.minSampleShading = 0.2f;
+        multisampleInfo.minSampleShading = 0.2f; // Min fraction for sample shading? Used to improve final image quality rather than just geometry edges
         multisampleInfo.pSampleMask = nullptr;
         multisampleInfo.alphaToCoverageEnable = VK_FALSE;
         multisampleInfo.alphaToOneEnable = VK_FALSE;
@@ -1074,7 +1084,7 @@ private:
         depthStencilInfo.back = {}; // optional
         
         // --- Color blending ---
-        // Per framebuffer settings
+        // Per-framebuffer settings
         VkPipelineColorBlendAttachmentState colorBlendAttachment{};
         colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
         colorBlendAttachment.blendEnable = VK_FALSE; // Disable blending
@@ -1098,7 +1108,8 @@ private:
         colorBlendInfo.blendConstants[3] = 0.0f;
         
         // ===== Pipeline layout =====
-        VkPipelineLayoutCreateInfo pipelineLayoutInfo{}; // For uniforms
+        // For descriptor set layouts (and push constants)
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutInfo.setLayoutCount = 1;
         pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;  // uniform buffer, image sampler
@@ -1126,8 +1137,8 @@ private:
         } else {
             graphicsPipelineInfo.pDynamicState = nullptr;
         }
-        graphicsPipelineInfo.layout = pipelineLayout;
-        graphicsPipelineInfo.renderPass = renderPass;
+        graphicsPipelineInfo.layout = pipelineLayout; // Descriptor set layouts
+        graphicsPipelineInfo.renderPass = renderPass; // Render pass "description"
         graphicsPipelineInfo.subpass = 0; // Index of the subpass within the render pass where this graphics pipeline will be used
         graphicsPipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // If creating a pipeline derivative
         graphicsPipelineInfo.basePipelineIndex = -1; // If creating a pipeline derivative
@@ -1140,6 +1151,8 @@ private:
         vkDestroyShaderModule(device, fragShaderModule, nullptr);
     }
     VkShaderModule createShaderModule(const std::vector<char>& code) {
+        // Create a shader module from a string of code
+        
         VkShaderModuleCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         createInfo.codeSize = code.size();
@@ -1164,7 +1177,11 @@ private:
             
             VkFramebufferCreateInfo framebufferInfo{};
             framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            framebufferInfo.renderPass = renderPass; // Must be a compatible render pass (i.e., same number and type of attachments)
+            framebufferInfo.renderPass = renderPass; // Must be compatible with the requirements set by the render pass
+            // i.e., same number and type of attachments, such that:
+            // 0: Color attachment = colorImageView
+            // 1: Depth-stencil attachment = depthImageView
+            // 2: Color resolve attachment = swapchainImageViews[i]
             framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
             framebufferInfo.pAttachments = attachments.data();
             framebufferInfo.width = swapchainExtent.width;
@@ -1177,8 +1194,10 @@ private:
         }
     }
     
-    // ================ createCommandPool() ================
+    // ================ createCommandPools() ================
     void createCommandPools() {
+        // Create a command pool for the graphics pipeline, and optionally create a command pool for transfer operations
+        
         QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
         
         VkCommandPoolCreateInfo graphicsCommandPoolInfo{};
@@ -1204,14 +1223,20 @@ private:
     
     // ================ createColorResources() ================
     void createColorResources() {
+        // Create color image and image view
+        
+        // Color format is the same as the swapchain format
         VkFormat colorFormat = swapchainImageFormat;
         
+        // Create image and image view
         createImage(swapchainExtent.width, swapchainExtent.height, 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory);
         colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
     }
     
     // ================ createDepthResources() ================
     void createDepthResources() {
+        // Create depth image and image view
+        
         // Find format supported by physical device
         // Could alternatively hardcode VK_FORMAT_D32_SFLOAT because it is very commonly supported
         VkFormat format = findDepthFormat();
@@ -1280,7 +1305,7 @@ private:
         // _transfer_dst: for copy from buffer
         // _sampled for imageview to be used as descriptor in shader
         
-        // Transition image layout from its initial value (undefined) to transfer destination optimal
+        // Transition image layout from initial value _UNDEFINED to _TRANSFER_DST_OPTIMAL
         transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
         // Copy staging buffer to texture image
         copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
@@ -1295,6 +1320,8 @@ private:
         vkFreeMemory(device, stagingBufferMemory, nullptr);
     }
     void createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory ) {
+        // Create image, allocate memory, and bind memory to image
+        
         // Create image
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1306,7 +1333,7 @@ private:
         imageInfo.arrayLayers = 1;
         imageInfo.format = format;
         imageInfo.tiling = tiling; // How texels are laid out
-        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // Whether texels are discarded or preserved on the first transition; can only be _UNDEFINED or _PREINITIALIZED
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // Whether texels are discarded or preserved on the first transition; can only be _UNDEFINED or _PREINITIALIZED; need to separately "transition" the image to other layouts (e.g., VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
         imageInfo.usage = usage; // Will copy buffer into this image, and will sample it from fragment shader
         if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
             imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -1348,9 +1375,9 @@ private:
         allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
-            allocateInfo.commandPool = transferCommandPool; // May want to create a separate command pool with VK_COMMAND_POOL_CREATE_TRANSIENT_BIT set
+            allocateInfo.commandPool = transferCommandPool;
         } else {
-            allocateInfo.commandPool = graphicsCommandPool; // May want to create a separate command pool with VK_COMMAND_POOL_CREATE_TRANSIENT_BIT set
+            allocateInfo.commandPool = graphicsCommandPool;
         }
         allocateInfo.commandBufferCount = 1;
         
@@ -1387,7 +1414,7 @@ private:
         }
     }
     void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels) {
-        // Execute the transition using a command buffer
+        // Execute the transition using a command buffer, with an image memory barrier as a pipeline barrier
         
         // 1. Allocate and begin
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
@@ -1481,7 +1508,8 @@ private:
         // Begin recording command buffer
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
         
-        // Set common barrier properties
+        // Set common image memory barrier properties
+        // - Queue family index stays the same (ignored)
         VkImageMemoryBarrier barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.image = image;
@@ -1504,6 +1532,7 @@ private:
             barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             
             // Create pipeline barrier for this mip level
+            // - This modifies the layout and access mask
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
             
             // Define blit source and blit destination
@@ -1532,6 +1561,7 @@ private:
             barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             
             // Create pipeline barrier for layout transition
+            // - This modifies the layout and access mask
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
             
             if (mipWidth > 1) mipWidth /= 2;
@@ -1557,6 +1587,9 @@ private:
         textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 1);
     }
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels) {
+        // Create an image view for the given image
+        // - Image view specifies view type, format, aspect mask, mip levels, layers
+        
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = image;
@@ -1582,6 +1615,9 @@ private:
     
     // ================ createTextureSampler() ================
     void createTextureSampler() {
+        // Create an image sampler (independent of any image)
+        // - Sampler specifies mag filter, min filter, addressing mode (tiling mode), border, anisotropy, compare op, mipmap mode, lod
+        
         VkSamplerCreateInfo samplerInfo{};
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -1613,6 +1649,8 @@ private:
     
     // ================ loadModel() ================
     void loadModel() {
+        // Use tinyobjloader to load vertices and indices
+        
         tinyobj::attrib_t attrib;
         std::vector<tinyobj::shape_t> shapes;
         std::vector<tinyobj::material_t> materials;
@@ -1715,6 +1753,8 @@ private:
         vkBindBufferMemory(device, buffer, bufferMemory, 0);
     }
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+        // Look into this!
+        
         VkPhysicalDeviceMemoryProperties memoryProperties;
         vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
         
@@ -1777,12 +1817,12 @@ private:
         
         uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
         uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-        uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+        uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT); // Pointers; written to on each frame
         
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformBuffers[i], uniformBuffersMemory[i]);
             
-            vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);   // "Persistent" mapping
+            vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]); // "Persistent" mapping
         }
     }
     
@@ -1807,15 +1847,17 @@ private:
         }
     }
     void createDescriptorSets() {
-        // Reside in descriptor pools; use descriptor set layouts
-        // Used for uniform buffers, image samplers, etc.
+        // For each frame, allocate and update a descriptor set in the descriptor pool
+        // - Each descriptor set follows the descriptorSetLayout, which was also used to define the pipeline layout
+        // - Thus descriptor sets must follow the pipeline layout
+        // - Used for uniform buffers, image samplers, etc.
         
         std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
         VkDescriptorSetAllocateInfo allocateInfo{};
         allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         allocateInfo.descriptorPool = descriptorPool;
         allocateInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-        allocateInfo.pSetLayouts = layouts.data();
+        allocateInfo.pSetLayouts = layouts.data(); // Layout bindings matter later
         
         descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
         if (vkAllocateDescriptorSets(device, &allocateInfo, descriptorSets.data()) != VK_SUCCESS) {
@@ -1864,6 +1906,8 @@ private:
     
     // ================ createCommandBuffers() ================
     void createCommandBuffers() {
+        // Create graphics command buffers (one per frame in flight), which will be reused through execution
+        
         graphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
         
         VkCommandBufferAllocateInfo graphicsAllocateInfo{};
@@ -1874,20 +1918,6 @@ private:
         
         if (vkAllocateCommandBuffers(device, &graphicsAllocateInfo, graphicsCommandBuffers.data()) != VK_SUCCESS) {
             throw std::runtime_error("Failed to allocate command buffers!");
-        }
-        
-        if (SEPARATE_TRANSFER_QUEUE_FAMILY) {
-            transferCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-            
-            VkCommandBufferAllocateInfo transferAllocateInfo{};
-            transferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            transferAllocateInfo.commandPool = transferCommandPool;
-            transferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // Can be submitted directly to a queue, can't be called from other command buffers
-            transferAllocateInfo.commandBufferCount = static_cast<uint32_t>(transferCommandBuffers.size());
-            
-            if (vkAllocateCommandBuffers(device, &transferAllocateInfo, transferCommandBuffers.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Failed to allocate command buffers!");
-            }
         }
     }
     
@@ -1940,6 +1970,7 @@ private:
         
         // ~. Update uniform buffer
         updateUniformBuffer(currentFrame);
+        // Note that the image sampler doesn't get updated each frame
         
         // 3. Record a command buffer to draw the scene onto that image
         vkResetCommandBuffer(graphicsCommandBuffers[currentFrame], 0);
@@ -2094,7 +2125,7 @@ private:
         cleanupSwapchain();
         
         createSwapchain();
-        createImageViews();
+        createSwapchainImageViews();
         createColorResources();
         createDepthResources();
         createFramebuffers();
